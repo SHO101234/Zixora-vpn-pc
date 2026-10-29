@@ -1,0 +1,50 @@
+name: Build zixora VPN (Windows)
+
+# Manual + main-branch builds only. This workflow builds an
+# artifact; it does NOT create a GitHub release by itself.
+# A release is created manually from the artifact.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  # Pin the sing-box Windows release used for the core.
+  # VERIFY this version exists before the first run and bump
+  # deliberately; do not use "latest" (unreproducible builds).
+  SINGBOX_VERSION: "1.12.0"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: pip install -r requirements.txt
+
+      - name: Download sing-box core (Windows amd64, build-time only)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/SagerNet/sing-box/releases/download/v$env:SINGBOX_VERSION/sing-box-$env:SINGBOX_VERSION-windows-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile sing-box.zip
+          Expand-Archive sing-box.zip -DestinationPath singbox-tmp
+          Copy-Item "singbox-tmp/sing-box-$env:SINGBOX_VERSION-windows-amd64/sing-box.exe" -Destination .
+
+      - name: Build with PyInstaller
+        run: pyinstaller zixora-pc.spec
+
+      - name: Stage core beside the app
+        shell: pwsh
+        run: Copy-Item sing-box.exe -Destination dist/ZixoraVPN/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZixoraVPN-windows
+          path: dist/ZixoraVPN
