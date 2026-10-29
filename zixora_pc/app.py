@@ -47,7 +47,17 @@ class App(tk.Tk):
         self.userinfo = {}
         self.selected = None
         self._build()
+        # Closing the window must disconnect first, or the system
+        # proxy would be left pointing at a dead local port.
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._tick()
+
+    def _on_close(self):
+        try:
+            self.core.stop()
+        except Exception:
+            pass
+        self.destroy()
 
     # ---------- layout ----------
     def _build(self):

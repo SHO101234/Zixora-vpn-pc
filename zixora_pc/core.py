@@ -22,6 +22,11 @@ HONEST LIMITS (v0.1 scaffold — see BUILD-REPORT.md):
   the sing-box TUN stack. tun_mode=True currently only records
   the intent + checks admin; the actual TUN inbound block is a
   stub (system-proxy mode is the working path in v0.1).
+- System proxy (Windows-only, see sysproxy.py): in system-proxy
+  mode, connect sets the Windows system proxy to the local mixed
+  inbound and disconnect restores the previous settings exactly.
+  This code has NOT run on Windows yet — the user's PC test is
+  the real gate, and a PAC (AutoConfigURL) setup is not handled.
 - No binary is bundled in this repo. The core exe is expected
   next to the app exe (CI places it there) or on PATH.
 """
@@ -37,6 +42,9 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+
+from .sysproxy import PROXY_PORT as MIXED_PORT
+from .sysproxy import SystemProxy
 
 
 @dataclass
@@ -199,7 +207,7 @@ def build_singbox_config(server, tun_mode=False):
         "log": {"level": "warning"},
         "inbounds": [
             {"type": "mixed", "tag": "mixed-in",
-             "listen": "127.0.0.1", "listen_port": 2080},
+             "listen": "127.0.0.1", "listen_port": MIXED_PORT},
         ],
         "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
         "route": {"rules": [{"outbound": "proxy"}]},
@@ -221,6 +229,14 @@ class CoreManager:
         self.started_at = None
         self.server = None
         self.workdir = workdir or os.getcwd()
+        self.proxy = SystemProxy(workdir=self.workdir)
+        # Crash-recovery: a previous run may have died while the
+        # system proxy pointed at our (now dead) local inbound.
+        # Restore the saved settings if they are still ours.
+        try:
+            self.proxy.restore_stale()
+        except Exception:
+            pass
 
     def is_running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -261,9 +277,28 @@ class CoreManager:
             return False, f"Could not start core: {exc}"
         self.started_at = time.time()
         self.server = server
+        if not tun_mode:
+            # System-proxy mode: point Windows at the local inbound.
+            # On Windows, a proxy failure must fail the connect —
+            # "Connected" without routing would be a lie. On
+            # non-Windows (dev only) the proxy step is skipped.
+            import sys as _sys
+            if _sys.platform == "win32":
+                ok_proxy, proxy_msg = self.proxy.set_to_local()
+                if not ok_proxy:
+                    self.stop()
+                    return False, (f"Core started but {proxy_msg} "
+                                   "Disconnected to avoid a broken state.")
         return True, "Connected"
 
     def stop(self):
+        # Always restore the system proxy, even if stopping the
+        # core itself fails — never leave it pointing at a dead
+        # local port.
+        try:
+            self.proxy.restore()
+        except Exception:
+            pass
         if self.proc is not None:
             try:
                 self.proc.terminate()
